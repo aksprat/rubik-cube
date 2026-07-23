@@ -62,6 +62,12 @@ The backend (`backend/app/main.py`) exposes one endpoint, `POST /api/coach/chat`
 
 A vision-capable model (e.g. `nemotron-nano-12b-v2-vl`) is documented as a possible *narrow, optional* fallback for scanning specific low-confidence stickers, but is explicitly **not** part of the primary scanning pipeline — see the rationale in `docs/architecture.md` §2.
 
+## Live deployment
+
+Deployed on [DigitalOcean App Platform](https://www.digitalocean.com/products/app-platform): **https://rubik-cube-solver-94w4m.ondigitalocean.app**
+
+One app, two components sharing a single domain via path-based ingress routing (`/api/*` → backend, `/` → frontend) — no CORS needed in production, since the browser sees same-origin requests. Auto-deploys on every push to `main`. `DO_INFERENCE_API_KEY` is stored as an encrypted `SECRET`-type environment variable on the backend component only.
+
 ## Running it locally
 
 **Backend:**
