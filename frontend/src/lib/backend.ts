@@ -12,7 +12,11 @@ export interface CoachChatContext {
   mode?: 'solve' | 'teach'
 }
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:8000'
+// No default here on purpose: in production the frontend and backend share one
+// domain via path-based ingress routing, so a relative '' (same-origin '/api/...')
+// is correct. Local dev sets an explicit absolute URL via .env.local instead,
+// since there's no shared domain between the two separate dev servers.
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? ''
 
 export async function sendCoachChatMessage(
   messages: CoachChatMessage[],
