@@ -1,6 +1,6 @@
 # Rubik's Cube Solver & Coach
 
-Scan a physical Rubik's cube with your phone camera, get an optimal solution, and step through it with an AI coach that explains each move — powered by [DigitalOcean Gradient AI Platform Serverless Inference](https://docs.digitalocean.com/products/inference/).
+Scan a physical Rubik's cube with your phone camera, get an optimal solution, and step through it with an AI coach that explains each move — powered by [DigitalOcean Serverless Inference Platform](https://docs.digitalocean.com/products/inference/).
 
 Full design rationale and decision log: [docs/architecture.md](docs/architecture.md).
 
