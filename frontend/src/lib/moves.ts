@@ -10,3 +10,9 @@ export function invertMove(move: string): string {
 export function invertMoves(moves: string[]): string[] {
   return [...moves].reverse().map(invertMove)
 }
+
+export function describeMove(move: string): string {
+  const faces: Record<string, string> = { U: 'top', R: 'right', F: 'front', D: 'bottom', L: 'left', B: 'back' }
+  const direction = move.endsWith('2') ? '180° (half a turn)' : move.endsWith("'") ? '90° counterclockwise' : '90° clockwise'
+  return `Turn the ${faces[move[0]]} face ${direction}, looking directly at that face.`
+}

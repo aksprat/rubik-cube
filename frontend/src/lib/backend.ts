@@ -10,6 +10,9 @@ export interface CoachChatContext {
   facelet_string?: string
   solution_moves?: string[]
   mode?: 'solve' | 'teach'
+  completed_moves?: number
+  front_color?: string
+  top_color?: string
 }
 
 // No default here on purpose: in production the frontend and backend share one

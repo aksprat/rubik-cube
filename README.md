@@ -1,6 +1,6 @@
 # Rubik's Cube Solver & Coach
 
-Scan a physical Rubik's cube with your phone camera, get an optimal solution, and step through it with an AI coach that explains each move — powered by [DigitalOcean Serverless Inference Platform](https://docs.digitalocean.com/products/inference/).
+Scan a physical Rubik's cube with your phone camera, get a verified solution, and step through it with an AI coach that explains moves — powered by [DigitalOcean Serverless Inference Platform](https://docs.digitalocean.com/products/inference/).
 
 Full design rationale and decision log: [docs/architecture.md](docs/architecture.md).
 
@@ -44,9 +44,9 @@ The backend (`backend/app/main.py`) exposes one endpoint, `POST /api/coach/chat`
        api_key=os.environ["DO_INFERENCE_API_KEY"],
    )
    completion = client.chat.completions.create(
-       model=os.environ.get("DO_CHAT_MODEL", "deepseek-4-flash"),
+       model=os.environ.get("DO_CHAT_MODEL", "anthropic-claude-haiku-4.5"),
        messages=messages,
-       max_tokens=400,
+       max_tokens=800,
    )
    ```
 4. Returns the reply. The DigitalOcean **Model Access Key** (scoped to inference only, not a full account token) lives exclusively in this backend's environment — the frontend never sees it, and every call is proxied.
@@ -55,10 +55,24 @@ The backend (`backend/app/main.py`) exposes one endpoint, `POST /api/coach/chat`
 
 | | |
 |---|---|
-| **Chosen model** | [`deepseek-4-flash`](https://inference.do-ai.run/v1/models) (DeepSeek V4 Flash) |
-| **Why** | This is a short, frequent, latency-sensitive workload (a chat coach answering quick questions) — DeepSeek V4 Flash is one of the cheapest capable chat models in DO's catalog (~$0.11 / $0.22 per 1M input/output tokens) and handles this kind of concise, single-turn coaching well. There's no reasoning-heavy or long-context need here that would justify a pricier model. |
-| **Documented upgrade path** | `llama3.3-70b-instruct` — swap by changing `DO_CHAT_MODEL`, no code changes, if coaching quality ever needs to improve. |
-| **Note on model IDs** | DigitalOcean's catalog identifies models by an internal slug that can differ from the display name — "DeepSeek V4 Flash" is actually `deepseek-4-flash` in the API, confirmed by querying `GET /v1/models` against a live account. Worth re-checking if you swap models, since the display name is not a reliable guess for the slug. |
+| **Default model** | `anthropic-claude-haiku-4.5` (Claude Haiku 4.5), replacing DeepSeek V4 Flash. |
+| **Rationale** | Cost-conscious choice for following the verified move list and explaining notation in conversation, selected instead of Sonnet 4.6. This is a recommendation, not a measured head-to-head quality result; validate with real coaching questions before production rollout. |
+| **Cost and access** | DigitalOcean lists $1 input / $5 output per million tokens and restricts Anthropic models to Tier 3+ (checked 2026-10-03). A 1,000-input/300-output-token reply is about $0.0025, excluding caching—67% less than Sonnet 4.6 at the same token counts. |
+| **Lower-cost alternative** | Set `DO_CHAT_MODEL=llama3.3-70b-instruct` if Anthropic access or cost is unsuitable. Model switching is explicit; there is no silent fallback. |
+| **Deployment** | Set the backend App Platform environment variable to `DO_CHAT_MODEL=anthropic-claude-haiku-4.5`, authorize Haiku in the Model Access Key, and redeploy. Any existing DeepSeek or Sonnet environment value overrides the new code default. |
+
+Sources: DigitalOcean [model catalog](https://docs.digitalocean.com/products/inference/details/models/), [pricing](https://docs.digitalocean.com/products/inference/details/pricing/), and [account limits](https://docs.digitalocean.com/products/inference/details/limits/). Availability must also be checked against your account's `/v1/models` response. The new model has not been called with a live account as part of this fix.
+
+**Changing the model does not fix scanning or solving.** Images never go to the coach. Median pixel sampling and center-calibrated color classification run locally; a deterministic solver generates moves in a Web Worker and verifies that applying them solves the exact scanned state. The coach receives the starting state, verified moves, completed-move count, and actual front/top colors. It is instructed not to invent a solution or pretend a short Kociemba solution is a beginner method.
+
+### Scanning and correction troubleshooting
+
+- Fill the camera square with one face, straight-on, in even light. Move the entire cube between captures; do not turn individual layers.
+- Capture front → right → back → left with the same top face. For the top capture, the back face borders the grid's top edge; for the bottom capture, the front face borders its top edge.
+- Review six distinct centers and nine stickers per color. Counts alone cannot prove a valid state. Forced color assignments and ambiguous colors are flagged for review.
+- Correct stickers, rotate sideways grids, or use **Check for sideways faces**. Only a unique valid state can be proposed, and applying it requires confirmation; ambiguous states are not guessed.
+- **Redo** replaces only that face and returns to review, preserving other faces and manual corrections. Rescans are not forced to fit a nine-per-color quota.
+- Follow the displayed front/top holding orientation. Next/Previous/Play now share the 3D timeline; the six small grids display the actual scanned color scheme. An already solved cube explicitly needs zero moves.
 
 A vision-capable model (e.g. `nemotron-nano-12b-v2-vl`) is documented as a possible *narrow, optional* fallback for scanning specific low-confidence stickers, but is explicitly **not** part of the primary scanning pipeline — see the rationale in `docs/architecture.md` §2.
 

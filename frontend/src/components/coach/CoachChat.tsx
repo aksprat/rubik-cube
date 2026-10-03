@@ -14,9 +14,12 @@ interface DisplayMessage {
 interface CoachChatProps {
   faceletString: string
   solutionMoves: string[]
+  completedMoves: number
+  frontColor: string
+  topColor: string
 }
 
-export default function CoachChat({ faceletString, solutionMoves }: CoachChatProps) {
+export default function CoachChat({ faceletString, solutionMoves, completedMoves, frontColor, topColor }: CoachChatProps) {
   const [messages, setMessages] = useState<DisplayMessage[]>([
     {
       id: 'seed',
@@ -55,6 +58,9 @@ export default function CoachChat({ faceletString, solutionMoves }: CoachChatPro
         facelet_string: faceletString,
         solution_moves: solutionMoves,
         mode: 'solve',
+        completed_moves: completedMoves,
+        front_color: frontColor,
+        top_color: topColor,
       })
       setMessages((prev) => [...prev, { id: `${Date.now()}-a`, role: 'assistant', content: reply }])
     } catch {

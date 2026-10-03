@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -37,6 +37,9 @@ class SolveContext(BaseModel):
     facelet_string: Optional[str] = None
     solution_moves: Optional[list[str]] = None
     mode: Optional[Literal["solve", "teach"]] = None
+    completed_moves: int = Field(default=0, ge=0)
+    front_color: Optional[str] = None
+    top_color: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
@@ -54,7 +57,13 @@ SYSTEM_PROMPT = (
     "cube. Keep replies concise (2-4 sentences) unless the user explicitly "
     "asks for more detail. When referencing specific moves, use standard "
     "cube notation (U, R, F, D, L, B, with ' for counterclockwise and 2 for "
-    "double turns)."
+    "double turns). Clockwise is always viewed directly at the face being turned. "
+    "The deterministic solver, not you, computes and verifies the solution. "
+    "Explain the provided moves without inventing or replacing them. A short "
+    "Kociemba solution is not a beginner layer-by-layer method; do not claim "
+    "each move completes a beginner stage. You cannot see camera images or "
+    "diagnose sticker colors from text. Respect the given completed-move count "
+    "and holding orientation. If context is insufficient, ask instead of guessing."
 )
 
 
@@ -67,7 +76,7 @@ def _build_context_message(context: SolveContext) -> Optional[str]:
 
     if context.facelet_string is not None:
         parts.append(
-            "The user's current cube state (facelet string, URFDLB order) "
+            "The user's starting cube state before any solution moves (facelet string, URFDLB order) "
             f"is: {context.facelet_string}."
         )
     if context.solution_moves is not None:
@@ -76,6 +85,12 @@ def _build_context_message(context: SolveContext) -> Optional[str]:
         )
     if context.mode is not None:
         parts.append(f"Current mode: {context.mode}.")
+    parts.append(f"The user has completed {context.completed_moves} solution moves.")
+    if context.front_color and context.top_color:
+        parts.append(f"Hold the {context.front_color} center in front and the {context.top_color} center on top.")
+    if context.solution_moves is not None:
+        remaining = context.solution_moves[context.completed_moves:]
+        parts.append(f"Next move: {remaining[0] if remaining else 'none; solution complete'}.")
 
     if not parts:
         return None
@@ -108,19 +123,24 @@ def coach_chat(chat_request: ChatRequest) -> ChatResponse:
     )
 
     client = OpenAI(
-        base_url=os.environ["DO_INFERENCE_BASE_URL"],
+        base_url=os.environ.get("DO_INFERENCE_BASE_URL", "https://inference.do-ai.run/v1/"),
         api_key=api_key,
+        timeout=30.0,
+        max_retries=1,
     )
 
     try:
         completion = client.chat.completions.create(
-            model=os.environ.get("DO_CHAT_MODEL", "deepseek-4-flash"),
+            model=os.environ.get("DO_CHAT_MODEL", "anthropic-claude-haiku-4.5"),
             messages=messages,
-            max_tokens=400,
+            max_tokens=800,
         )
-    except Exception as exc:  # noqa: BLE001 - surface upstream failure as 502
+    except Exception:
         raise HTTPException(
-            status_code=502, detail=f"Inference request failed: {exc}"
+            status_code=502, detail="The coach is unavailable. Check inference access and model configuration."
         )
 
-    return ChatResponse(reply=completion.choices[0].message.content)
+    reply = completion.choices[0].message.content if completion.choices else None
+    if not reply:
+        raise HTTPException(status_code=502, detail="The coach returned an empty reply. Please try again.")
+    return ChatResponse(reply=reply)

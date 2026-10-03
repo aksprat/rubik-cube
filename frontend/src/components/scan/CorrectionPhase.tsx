@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { SCAN_SEQUENCE } from '@/lib/cube/orientation'
+import { SCAN_SEQUENCE, TOP_EDGE_FACE } from '@/lib/cube/orientation'
+import { findFaceRotations, type RotationRecovery } from '@/lib/cube/rotationRecovery'
 import { CUBE_COLORS } from '@/lib/cube/types'
 import type { CaptureMap, CubeColorName, ValidationResult } from '@/lib/cube/types'
 import { SWATCH_HEX } from '@/lib/colorSwatches'
@@ -12,6 +13,8 @@ interface CorrectionPhaseProps {
   onChangeCell: (stepId: string, index: number, color: CubeColorName) => void
   onSolve: () => void
   onRedoFace: (stepIndex: number) => void
+  onRotateFace: (stepId: string) => void
+  onReplaceCaptures: (captures: CaptureMap) => void
 }
 
 interface ActiveCell {
@@ -27,8 +30,15 @@ export default function CorrectionPhase({
   onChangeCell,
   onSolve,
   onRedoFace,
+  onRotateFace,
+  onReplaceCaptures,
 }: CorrectionPhaseProps) {
   const [active, setActive] = useState<ActiveCell | null>(null)
+  const [recovery, setRecovery] = useState<{ source: CaptureMap; result: RotationRecovery } | null>(null)
+  const [checking, setChecking] = useState(false)
+  const counts = CUBE_COLORS.map((color) => ({ color, count: Object.values(captureMap).flat().filter((sticker) => sticker.color === color).length }))
+  const centersUnique = new Set(SCAN_SEQUENCE.map((step) => captureMap[step.id][4].color)).size === 6
+  const rotationResult = recovery?.source === captureMap ? recovery.result : null
 
   return (
     <div className="mx-auto w-full max-w-2xl flex-1 space-y-6 p-4">
@@ -38,6 +48,15 @@ export default function CorrectionPhase({
           Tap any sticker to fix its color. Cells outlined in red were low-confidence reads — double-check those
           first.
         </p>
+      </div>
+
+      <div className="space-y-2 text-sm">
+        <p>Each color needs 9 stickers and a different center. A correct color count alone does not guarantee a solvable cube.</p>
+        <div className="flex flex-wrap gap-2">
+          {counts.map(({ color, count }) => <span key={color} className={count === 9 ? '' : 'font-bold text-red-600'}>{color}: {count}/9</span>)}
+        </div>
+        {!centersUnique && <p role="alert" className="font-medium text-red-600">Duplicate center colors: correct the centers or rescan the wrong face.</p>}
+        <p>For each grid, look directly at that face with the indicated neighboring center above its top edge. Rotate the grid if you captured it sideways.</p>
       </div>
 
       {validation && !validation.valid && (
@@ -50,6 +69,27 @@ export default function CorrectionPhase({
           </ul>
         </div>
       )}
+
+      <div className="space-y-2 rounded border border-zinc-300 p-3 text-sm dark:border-zinc-700">
+        <button type="button" disabled={checking || !centersUnique || counts.some(({ count }) => count !== 9)}
+          className="text-blue-600 underline disabled:opacity-40"
+          onClick={() => {
+            setChecking(true)
+            setTimeout(() => {
+              setRecovery({ source: captureMap, result: findFaceRotations(captureMap) })
+              setChecking(false)
+            }, 0)
+          }}>
+          {checking ? 'Checking orientations…' : 'Check for sideways faces'}
+        </button>
+        {rotationResult?.status === 'none' && <p>No solution from rotations alone. Recheck sticker colors and face order; rescan if needed.</p>}
+        {rotationResult?.status === 'ambiguous' && <p>Several different cube states fit these colors. We will not guess. Use the top-edge hints to rotate the grids or rescan.</p>}
+        {rotationResult?.status === 'unique' && <>
+          <p>One solvable state fits face rotations. Check these clockwise grid rotations against your cube before applying:</p>
+          <p>{SCAN_SEQUENCE.filter((step) => rotationResult.turns[step.id]).map((step) => `${step.title}: ${rotationResult.turns[step.id] * 90}°`).join(', ') || 'No rotations needed.'}</p>
+          <button type="button" className="text-blue-600 underline" onClick={() => onReplaceCaptures(rotationResult.captures)}>Apply these rotations</button>
+        </>}
+      </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         {SCAN_SEQUENCE.map((step, stepIdx) => (
@@ -64,6 +104,7 @@ export default function CorrectionPhase({
                 Redo
               </button>
             </div>
+            <p className="text-xs text-zinc-500">Top edge: {captureMap[TOP_EDGE_FACE[step.id]][4].color} center</p>
             <div className="grid grid-cols-3 gap-0.5 rounded border border-zinc-300 bg-zinc-200 p-0.5 dark:border-zinc-700 dark:bg-zinc-800">
               {captureMap[step.id].map((sticker, i) => (
                 <button
@@ -79,6 +120,7 @@ export default function CorrectionPhase({
                 />
               ))}
             </div>
+            <button type="button" onClick={() => onRotateFace(step.id)} className="text-xs text-blue-600 underline" aria-label={`Rotate ${step.title} clockwise`}>Rotate ↻</button>
           </div>
         ))}
       </div>

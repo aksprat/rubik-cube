@@ -26,12 +26,12 @@ Base URL `https://inference.do-ai.run/v1/`, OpenAI-compatible (`/v1/chat/complet
 
 | Role | Model | Rationale |
 |---|---|---|
-| **Coaching / chat / step narration** (chosen) | **DeepSeek V4 Flash** (~$0.11 / $0.22 per 1M input/output tokens) | Cheapest capable chat model in the catalog; good fit for short, frequent coaching replies and step narration. |
-| Quality upgrade path | Llama 3.3 70B Instruct (~$0.65/$0.65 per 1M) | If DeepSeek V4 Flash's explanation quality proves insufficient in testing, swap here — same OpenAI-compatible call shape, just change the `model` field. |
+| **Coaching / chat / step narration** (default) | **Claude Haiku 4.5**, `anthropic-claude-haiku-4.5` ($1 / $5 per 1M input/output tokens) | Cost-conscious recommendation for explaining verified moves, selected instead of Sonnet 4.6; not a measured app-specific benchmark. Requires Tier 3+ and a key authorized for this model. |
+| Lower-cost alternative | Llama 3.3 70B Instruct, `llama3.3-70b-instruct` | Explicit `DO_CHAT_MODEL` override when Haiku's cost/access requirements are unsuitable. |
 | **Vision fallback (optional, v2)** | Nemotron Nano 12B v2 VL | DO's flagship documented small VLM; scope calls to a single cropped face image only. |
 | Vision alt | Kimi K2.6 | Larger context if the fallback ever needs more than one image at a time. |
 
-Caveats: DO's catalog and pricing change frequently — re-verify at `docs.digitalocean.com/products/inference/details/pricing/` before shipping. Rate limits are tiered by account spend/age (Tier 1–2 ≈ 120 RPM / 500K–750K TPM up to Tier 5 ≈ 4,500 RPM); open-weight models like DeepSeek V4 Flash are available even on the lowest tier (no Anthropic/OpenAI gating).
+Caveats: DO's catalog, pricing, and account-tier restrictions change. Recheck the official model catalog, pricing, and limits before shipping. The new default was checked against published docs on 2026-10-03, not against a live account. Update existing deployment environment overrides and key scopes; changing the code alone does not replace an explicitly configured DeepSeek model.
 
 ## 4. Solving engine
 
@@ -89,7 +89,7 @@ Two independent puzzle sizes, two different algorithmic approaches. Both share t
 ## 7. Feature roadmap
 
 **MVP**
-- Guided 6-face scan (3x3 and 4x4) → validation with specific error messages → solve (3x3: fast + teach-me; 4x4: fast only) → 3D animated stepper (cubing.js) → AI coach chat (DeepSeek V4 Flash) for "why this move?" and friendlier step narration → basic timer/history.
+- Guided 6-face scan (3x3 and 4x4) → validation with specific error messages → solve (3x3: fast + teach-me; 4x4: fast only) → 3D animated stepper (cubing.js) → AI coach chat (Claude Haiku 4.5 by default) for move explanations → basic timer/history.
 
 **v2 (differentiators — gaps found across every competitor app researched)**
 - Accessibility: colorblind-safe palette, screen-reader-friendly flow, texture-based input alternative (à la Blind Cube) — almost no competitor does this.
@@ -117,17 +117,17 @@ Two independent puzzle sizes, two different algorithmic approaches. Both share t
 
 ## 9. Phase 1 build notes (what actually exists in the repo right now)
 
-**Backend** (`backend/`): FastAPI, one real endpoint (`POST /api/coach/chat`) proxying to DO Serverless Inference via the `openai` SDK pointed at `https://inference.do-ai.run/v1/`. `DO_CHAT_MODEL` defaults to `deepseek-4-flash`, confirmed live (see decision log). No DB, no auth, no 4x4 — intentionally out of scope for now.
+**Backend** (`backend/`): FastAPI, one real endpoint (`POST /api/coach/chat`) proxying to DO Serverless Inference via the `openai` SDK pointed at `https://inference.do-ai.run/v1/`. `DO_CHAT_MODEL` defaults to `anthropic-claude-haiku-4.5`; a live-account smoke test remains necessary before rollout. No DB, no auth, no 4x4 — intentionally out of scope for now.
 
-**Frontend** (`frontend/`): Next.js 16 (App Router, Turbopack, Tailwind v4). Cube logic lives in `src/lib/cube/` (`types.ts`, `orientation.ts`, `colorScience.ts`, `validation.ts`, `solve.ts`) and is covered by two standalone regression scripts (`scripts/test-cube-engine.ts`, `scripts/test-color-science.ts`, run via `npx tsx`) — run these after touching anything in `src/lib/cube/`.
+**Frontend** (`frontend/`): Next.js 16 (App Router, Turbopack, Tailwind v4). Cube logic lives in `src/lib/cube/`. Run `npm test` for engine, color, invalid-state, and rotation-recovery regression tests; run `npm run test:browser` against a running app for the synthetic-camera mobile flow.
 
 Two things worth understanding for anyone touching this code later:
 
 1. **Face identity comes from capture position, not color.** The guided scan (`orientation.ts`'s `SCAN_SEQUENCE`: front → right → back → left → up → down, each one simple physical turn from the last) assigns U/R/F/D/L/B by *which step of the sequence* a face was captured in, not by assuming a color scheme. Each face's own center sticker then tells you which physical color corresponds to that step's letter (centers never move on a 3x3). This works for any color scheme and needed no mirroring/rotation of any captured face's 9 values — verified two independent ways: (a) cross-checked directly against cubejs's internal corner/edge facelet-adjacency tables, and (b) an automated round-trip test (`test-cube-engine.ts`) that scrambles a cube with cubejs, simulates what the guided capture would read off that exact state, rebuilds the facelet string, and confirms it matches and solves correctly, across 6 scrambles including a 14-move one.
 2. **cubejs's `Cube.fromString` does not validate.** It silently produces a broken `Cube` on illegal input rather than throwing, so `validation.ts` implements the standard four checks (sticker count, piece existence, orientation parity, permutation parity) ourselves before anything is handed to the solver, surfacing which specific check failed rather than a generic error.
 
-Color classification (`colorScience.ts`) uses Lab-space distance with a few k-means-style recentering passes seeded from default reference swatches, then a greedy balancing pass that enforces exactly 9 stickers per color globally (across all 54 at once) — this is what resolves red/orange ambiguity, rather than a fixed per-pixel threshold. No explicit "calibrate your cube" onboarding flow yet (deferred); the mandatory manual-correction screen is the safety net for now.
+Color classification uses median pixel samples, calibrates Lab references from the six captured centers, and assigns the remaining stickers with minimum-cost matching and nine-per-color constraints. Confidence is measured against the assigned color, so quota-forced assignments cannot appear falsely confident. A face rescan uses calibrated references without rebalancing or overwriting other faces. Manual corrections remain authoritative. Color-count constraints alone do not prove legality; the review screen also checks centers, pieces, parity, and exact facelet round trips. Sideways grids can be rotated manually or recovered by enumerating face rotations; only a unique resulting state is proposed and must be confirmed.
 
-The AI coach chat is wired into the solve screen, calling the backend with the current facelet string + solution moves as context. cubejs handles the fast/near-optimal 3x3 solve; `cubing/twisty`'s `TwistyPlayer` renders the animated 3D solution (setup state reconstructed as the inverse of the solution moves, avoiding a second facelet-to-alg conversion). Solve history (facelet string, moves, timestamp) is saved to `localStorage` only — no backend persistence yet.
+The AI coach receives the starting facelet string, verified solution, completed-move count, and physical front/top colors. cubejs initializes and solves in a cancellable Web Worker, checks the exact state is solved by the returned moves, and explicitly handles zero-move solutions. `TwistyPlayer` is controlled by the same completed-move count as Next/Previous/Play. It uses standard diagram colors; an accompanying six-face view shows the user's actual colors at every step. Solve history remains localStorage-only.
 
 **Deferred to the next pass**: 3x3 "teach me" (layer-by-layer) mode, all of 4x4, the vision-model scan fallback, accounts/stats/algorithm trainer, and a full offline service worker (only the installable manifest exists today).

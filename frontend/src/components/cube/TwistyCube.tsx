@@ -1,60 +1,69 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { TwistyPlayer } from 'cubing/twisty'
 import { invertMoves } from '@/lib/moves'
 
 interface TwistyCubeProps {
   solutionMoves: string[]
+  completedMoves?: number
   className?: string
 }
 
-// Renders a live 3D animated cube via cubing/twisty's TwistyPlayer, a web
-// component backed by browser-only APIs (WebGL/canvas). Loaded dynamically,
-// client-side only, inside an effect.
-//
-// experimentalSetupAlg is set to the inverse of the solution: applying the
-// solution to that setup returns the cube to solved, which is exactly the
-// scrambled state this solve started from. That lets us reconstruct the
-// pre-solve state from the solution alone, with no separate facelet->alg
-// conversion needed.
-export default function TwistyCube({ solutionMoves, className }: TwistyCubeProps) {
+export default function TwistyCube({ solutionMoves, completedMoves, className }: TwistyCubeProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [player, setPlayer] = useState<TwistyPlayer | null>(null)
+  const [failed, setFailed] = useState(false)
+  const controlled = completedMoves !== undefined
 
   useEffect(() => {
     let cancelled = false
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let player: any = null
+    let mountedPlayer: TwistyPlayer | null = null
     const container = containerRef.current
-
-    async function mountPlayer() {
-      const { TwistyPlayer } = await import('cubing/twisty')
+    import('cubing/twisty').then(({ TwistyPlayer }) => {
       if (cancelled) return
-
-      const setupAlg = invertMoves(solutionMoves).join(' ')
-      const alg = solutionMoves.join(' ')
-
-      player = new TwistyPlayer({
+      mountedPlayer = new TwistyPlayer({
         puzzle: '3x3x3',
-        experimentalSetupAlg: setupAlg,
-        alg,
+        experimentalSetupAlg: invertMoves(solutionMoves).join(' '),
+        alg: solutionMoves.join(' '),
         background: 'none',
-        controlPanel: 'bottom-row',
+        controlPanel: controlled ? 'none' : 'bottom-row',
+        viewerLink: 'none',
       })
-      player.style.width = '100%'
-      player.style.height = '100%'
-      container?.appendChild(player)
-    }
-
-    mountPlayer()
-
+      mountedPlayer.indexer = 'simple'
+      mountedPlayer.style.width = '100%'
+      mountedPlayer.style.height = '100%'
+      container?.appendChild(mountedPlayer)
+      setPlayer(mountedPlayer)
+    }).catch(() => { if (!cancelled) setFailed(true) })
     return () => {
       cancelled = true
-      if (player && container?.contains(player)) {
-        container.removeChild(player)
-      }
+      mountedPlayer?.remove()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [solutionMoves.join(' ')])
+  }, [solutionMoves, controlled])
 
+  useEffect(() => {
+    if (!player || completedMoves === undefined) return
+    let cancelled = false
+    let frame = 0
+    Promise.all([player.experimentalModel.indexer.get(), player.experimentalModel.timestampRequest.get()])
+      .then(([indexer, previous]) => {
+        if (cancelled) return
+        const target = completedMoves === solutionMoves.length
+          ? indexer.algDuration() : indexer.indexToMoveStartTimestamp(completedMoves)
+        const start = typeof previous === 'number' ? previous : 0
+        const started = performance.now()
+        const animate = (now: number) => {
+          if (cancelled) return
+          const progress = Math.min(1, (now - started) / 300)
+          player.timestamp = start + (target - start) * progress
+          if (progress < 1) frame = requestAnimationFrame(animate)
+        }
+        frame = requestAnimationFrame(animate)
+      }).catch(() => { if (!cancelled) setFailed(true) })
+    return () => { cancelled = true; cancelAnimationFrame(frame) }
+  }, [player, completedMoves, solutionMoves.length])
+
+  if (failed) return <p className="text-sm text-zinc-500">3D preview unavailable. Follow the colored grids and move instructions below.</p>
   return <div ref={containerRef} className={className ?? 'mx-auto aspect-square w-full max-w-sm'} />
 }

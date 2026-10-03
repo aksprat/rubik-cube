@@ -1,17 +1,21 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { solveFast } from '@/lib/cube/solve'
+import { startSolve } from '@/lib/cube/solverClient'
+import type { CaptureMap } from '@/lib/cube/types'
+import { describeMove } from '@/lib/moves'
 import { saveSolveToHistory } from '@/lib/history'
 import MoveList from './MoveList'
 import TwistyCube from '@/components/cube/TwistyCube'
+import CubeNet from '@/components/cube/CubeNet'
 import CoachChat from '@/components/coach/CoachChat'
 
 interface SolvePhaseProps {
   faceletString: string
-  solverReadyPromise: Promise<void>
+  captureMap: CaptureMap
   scanStartedAt: number
   onStartOver: () => void
+  onReview: () => void
 }
 
 type SolverStatus = 'warming' | 'ready' | 'error'
@@ -20,37 +24,43 @@ const PLAY_INTERVAL_MS = 900
 
 export default function SolvePhase({
   faceletString,
-  solverReadyPromise,
+  captureMap,
   scanStartedAt,
   onStartOver,
+  onReview,
 }: SolvePhaseProps) {
   const [status, setStatus] = useState<SolverStatus>('warming')
   const [moves, setMoves] = useState<string[] | null>(null)
   const [currentIndex, setCurrentIndex] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const savedRef = useRef(false)
+  const [error, setError] = useState('Something went wrong computing the solution.')
 
   useEffect(() => {
     let mounted = true
-    solverReadyPromise.then(
-      () => {
+    let task: ReturnType<typeof startSolve> | undefined
+    Promise.resolve().then(() => {
+      if (!mounted) return
+      task = startSolve(faceletString)
+      return task.result
+    }).then(
+      (result) => {
         if (!mounted) return
-        try {
-          const result = solveFast(faceletString)
-          setMoves(result)
-          setStatus('ready')
-        } catch {
+        setMoves(result!)
+        setStatus('ready')
+      },
+      (reason) => {
+        if (mounted) {
+          setError(reason instanceof Error ? reason.message : 'Could not solve this cube.')
           setStatus('error')
         }
-      },
-      () => {
-        if (mounted) setStatus('error')
       }
     )
     return () => {
       mounted = false
+      task?.cancel()
     }
-  }, [faceletString, solverReadyPromise])
+  }, [faceletString])
 
   useEffect(() => {
     if (moves && !savedRef.current) {
@@ -64,7 +74,7 @@ export default function SolvePhase({
     }
   }, [moves, faceletString, scanStartedAt])
 
-  const isAtEnd = !!moves && currentIndex >= moves.length - 1
+  const isAtEnd = !!moves && currentIndex >= moves.length
 
   // Only schedules further ticks while playing and not yet at the end;
   // simply stops scheduling once the end is reached (rather than
@@ -73,7 +83,7 @@ export default function SolvePhase({
   useEffect(() => {
     if (!isPlaying || !moves || isAtEnd) return
     const timer = setTimeout(() => {
-      setCurrentIndex((i) => Math.min(moves.length - 1, i + 1))
+      setCurrentIndex((index) => Math.min(moves.length, index + 1))
     }, PLAY_INTERVAL_MS)
     return () => clearTimeout(timer)
   }, [isPlaying, currentIndex, moves, isAtEnd])
@@ -81,7 +91,7 @@ export default function SolvePhase({
   if (status === 'warming') {
     return (
       <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-zinc-500">
-        Warming up the solver…
+        Preparing and solving your cube… This can take a few seconds.
       </div>
     )
   }
@@ -89,9 +99,9 @@ export default function SolvePhase({
   if (status === 'error' || !moves) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-red-600">
-        <p>Something went wrong computing the solution.</p>
-        <button type="button" onClick={onStartOver} className="underline">
-          Start over
+        <p>{error}</p>
+        <button type="button" onClick={onReview} className="underline">
+          Back to review
         </button>
       </div>
     )
@@ -106,9 +116,15 @@ export default function SolvePhase({
         </button>
       </div>
 
-      <TwistyCube solutionMoves={moves} />
+      <p className="rounded border border-blue-300 p-3 text-sm">
+        Hold the <strong>{captureMap.front[4].color} center toward you</strong> and the <strong>{captureMap.up[4].color} center on top</strong> throughout the solution.
+        {' '}U = top, R = right, F = front, D = bottom, L = left, B = back. A prime (′) means counterclockwise; 2 means a half turn.
+      </p>
+      <TwistyCube solutionMoves={moves} completedMoves={currentIndex} />
+      <p className="text-center text-xs text-zinc-500">The 3D diagram uses standard colors (green front, white top). These grids use your actual cube colors:</p>
+      <CubeNet faceletString={faceletString} moves={moves} completedMoves={currentIndex} captureMap={captureMap} />
 
-      <div className="space-y-3">
+      {moves.length === 0 ? <p role="status" className="text-center font-medium">Your cube is already solved. No moves needed!</p> : <div className="space-y-3">
         <div className="flex items-center justify-center gap-2">
           <button
             type="button"
@@ -139,17 +155,16 @@ export default function SolvePhase({
             type="button"
             onClick={() => {
               setIsPlaying(false)
-              setCurrentIndex((i) => Math.min(moves.length - 1, i + 1))
+              setCurrentIndex((index) => Math.min(moves.length, index + 1))
             }}
-            disabled={currentIndex === moves.length - 1}
+            disabled={isAtEnd}
             className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium disabled:opacity-40 dark:border-zinc-700"
           >
             Next
           </button>
         </div>
-        <p className="text-center text-sm text-zinc-500">
-          Move {currentIndex + 1} of {moves.length}:{' '}
-          <span className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">{moves[currentIndex]}</span>
+        <p role="status" className="text-center text-sm text-zinc-500">
+          {isAtEnd ? `Solved — all ${moves.length} moves completed.` : `Completed ${currentIndex} of ${moves.length}. Next: ${moves[currentIndex]}. ${describeMove(moves[currentIndex])}`}
         </p>
         <MoveList
           moves={moves}
@@ -159,9 +174,10 @@ export default function SolvePhase({
             setCurrentIndex(i)
           }}
         />
-      </div>
+      </div>}
 
-      <CoachChat faceletString={faceletString} solutionMoves={moves} />
+      <button type="button" onClick={onReview} className="text-sm text-blue-600 underline">Back to review colors</button>
+      <CoachChat faceletString={faceletString} solutionMoves={moves} completedMoves={currentIndex} frontColor={captureMap.front[4].color} topColor={captureMap.up[4].color} />
     </div>
   )
 }

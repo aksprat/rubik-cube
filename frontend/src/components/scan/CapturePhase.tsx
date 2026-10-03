@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { CubeColorName, RGB, ScanStepDef } from '@/lib/cube/types'
+import type { CaptureMap, CubeColorName, RGB, ScanStepDef } from '@/lib/cube/types'
+import { SCAN_SEQUENCE, TOP_EDGE_FACE } from '@/lib/cube/orientation'
 import { quickClassifySingle } from '@/lib/cube/colorScience'
 import { drawSquareVideoFrame, sampleGridCells } from '@/lib/scanCapture'
 import GridOverlay from './GridOverlay'
@@ -11,6 +12,7 @@ interface CapturePhaseProps {
   stepIndex: number
   totalSteps: number
   allCaptured: boolean
+  captureMap: CaptureMap | null
   onCapture: (samples: RGB[]) => void
   onBack: () => void
   onContinue: () => void
@@ -21,6 +23,7 @@ export default function CapturePhase({
   stepIndex,
   totalSteps,
   allCaptured,
+  captureMap,
   onCapture,
   onBack,
   onContinue,
@@ -62,7 +65,6 @@ export default function CapturePhase({
             // gesture; the video will still start once one occurs.
           }
         }
-        setCameraReady(true)
         setCameraError(null)
       } catch (err) {
         let message = 'Could not access the camera on this device.'
@@ -106,7 +108,7 @@ export default function CapturePhase({
   const handleCaptureClick = useCallback(() => {
     const video = videoRef.current
     const canvas = canvasRef.current
-    if (!video || !canvas) return
+    if (!video || !canvas || video.readyState < 2) return
     if (!drawSquareVideoFrame(video, canvas)) return
     const samples = sampleGridCells(canvas)
     onCapture(samples)
@@ -118,7 +120,19 @@ export default function CapturePhase({
         <p className="text-sm font-medium text-zinc-500">
           Step {stepIndex + 1} of {totalSteps}: {step.title}
         </p>
-        <p className="mt-1 text-base">{step.instruction}</p>
+        <p className="mt-1 text-base">
+          {captureMap
+            ? `Face the ${captureMap[step.id][4].color} center toward the camera. Keep the ${captureMap[TOP_EDGE_FACE[step.id]][4].color} center on the adjacent face above its top edge.`
+            : step.instruction}
+        </p>
+        <p className="mt-2 text-sm font-medium">
+          Top edge: {SCAN_SEQUENCE.find((entry) => entry.id === TOP_EDGE_FACE[step.id])?.title}.
+          {' '}Turn the whole cube, never a single layer.
+        </p>
+        <p className="mt-2 text-xs text-zinc-500">
+          Fill the square with one face, straight-on. Use even light without glare; keep all nine sampling dots inside stickers.
+          Preview colors are estimates; the full scan calibrates against your centers.
+        </p>
       </div>
 
       {cameraError ? (
@@ -131,7 +145,7 @@ export default function CapturePhase({
         </div>
       ) : (
         <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-black">
-          <video ref={videoRef} className="h-full w-full object-cover" muted playsInline autoPlay />
+          <video ref={videoRef} className="h-full w-full object-cover" muted playsInline autoPlay onLoadedData={() => setCameraReady(true)} />
           <GridOverlay previewColors={previewColors} />
           {!cameraReady && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-sm text-white">

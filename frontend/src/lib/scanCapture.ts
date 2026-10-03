@@ -29,29 +29,18 @@ export function drawSquareVideoFrame(video: HTMLVideoElement, canvas: HTMLCanvas
   return true
 }
 
-function averageColorInRegion(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): RGB {
+function medianColorInRegion(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): RGB {
   const { data } = ctx.getImageData(x, y, Math.max(1, w), Math.max(1, h))
-  let r = 0
-  let g = 0
-  let b = 0
-  const pixelCount = data.length / 4
-  for (let i = 0; i < data.length; i += 4) {
-    r += data[i]
-    g += data[i + 1]
-    b += data[i + 2]
+  const channels: number[][] = [[], [], []]
+  for (let offset = 0; offset < data.length; offset += 4) {
+    channels[0].push(data[offset])
+    channels[1].push(data[offset + 1])
+    channels[2].push(data[offset + 2])
   }
-  return {
-    r: Math.round(r / pixelCount),
-    g: Math.round(g / pixelCount),
-    b: Math.round(b / pixelCount),
-  }
+  const medians = channels.map((channel) => channel.sort((first, second) => first - second)[Math.floor(channel.length / 2)])
+  return { r: medians[0], g: medians[1], b: medians[2] }
 }
 
-// Samples the 9 grid cells (row-major: index 0 = top-left, index 8 =
-// bottom-right) from a canvas that already holds a square frame. Each sample
-// averages a small region centered in the cell — well inside the cell's
-// edges — to dodge sticker-border bleed and specular glare near the grid
-// lines.
 export function sampleGridCells(canvas: HTMLCanvasElement): RGB[] {
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('Canvas 2D context unavailable')
@@ -69,7 +58,7 @@ export function sampleGridCells(canvas: HTMLCanvasElement): RGB[] {
       const y = Math.max(0, Math.round(cy - roi / 2))
       const w = Math.min(size - x, Math.round(roi))
       const h = Math.min(size - y, Math.round(roi))
-      samples.push(averageColorInRegion(ctx, x, y, w, h))
+      samples.push(medianColorInRegion(ctx, x, y, w, h))
     }
   }
   return samples

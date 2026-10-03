@@ -1,10 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { buildFaceletString, SCAN_SEQUENCE } from '@/lib/cube/orientation'
-import { classifyAllStickers } from '@/lib/cube/colorScience'
+import { buildFaceletString, rotateFace, SCAN_SEQUENCE } from '@/lib/cube/orientation'
+import { classifyAllStickers, classifyRescannedFace } from '@/lib/cube/colorScience'
 import { validateFaceletString } from '@/lib/cube/validation'
-import { ensureSolverReady } from '@/lib/cube/solve'
 import type { CaptureMap, CubeColorName, RGB, ValidationResult } from '@/lib/cube/types'
 import CapturePhase from '@/components/scan/CapturePhase'
 import CorrectionPhase from '@/components/scan/CorrectionPhase'
@@ -20,15 +19,6 @@ export default function ScanPage() {
   const [faceletString, setFaceletString] = useState<string | null>(null)
   const [validation, setValidation] = useState<ValidationResult | null>(null)
 
-  // Kick off the solver warm-up as early as possible, via a lazy initial
-  // state so it runs exactly once on the very first client render (this
-  // never runs during the static SSR prerender since it's gated on
-  // `window`, and — unlike history's localStorage read — nothing about the
-  // capture phase's rendered output depends on it, so there's no hydration
-  // mismatch risk in computing it this way instead of in an effect).
-  const [solverReadyPromise] = useState<Promise<void> | null>(() =>
-    typeof window !== 'undefined' ? ensureSolverReady() : null
-  )
   const [scanStartedAt, setScanStartedAt] = useState<number | null>(() =>
     typeof window !== 'undefined' ? Date.now() : null
   )
@@ -37,11 +27,8 @@ export default function ScanPage() {
   const allCaptured = SCAN_SEQUENCE.every((s) => (rawCaptures[s.id]?.length ?? 0) === 9)
 
   function finalizeCaptures(all: Record<string, RGB[]>) {
-    // classifyAllStickers must be called once on the full 54-sample batch so
-    // it can globally balance "exactly 9 per color" (e.g. resolving
-    // red/orange ambiguity) rather than per-face.
     const flat = SCAN_SEQUENCE.flatMap((s) => all[s.id])
-    const classified = classifyAllStickers(flat)
+    const classified = classifyAllStickers(flat, 9, SCAN_SEQUENCE.map((_, index) => index * 9 + 4))
 
     let idx = 0
     const map: CaptureMap = {}
@@ -60,6 +47,13 @@ export default function ScanPage() {
   function handleCapture(samples: RGB[]) {
     const nextRaw = { ...rawCaptures, [currentStep.id]: samples }
     setRawCaptures(nextRaw)
+    if (captureMap) {
+      const classified = classifyRescannedFace(samples, SCAN_SEQUENCE.map((step) => captureMap[step.id][4]))
+      setCaptureMap({ ...captureMap, [currentStep.id]: samples.map((rgb, index) => ({ rgb, ...classified[index] })) })
+      setValidation(null)
+      setPhase('correction')
+      return
+    }
     if (stepIndex < SCAN_SEQUENCE.length - 1) {
       setStepIndex((i) => i + 1)
     } else if (SCAN_SEQUENCE.every((s) => (nextRaw[s.id]?.length ?? 0) === 9)) {
@@ -68,6 +62,7 @@ export default function ScanPage() {
   }
 
   function handleChangeCell(stepId: string, index: number, color: CubeColorName) {
+    setValidation(null)
     setCaptureMap((prev) => {
       if (!prev) return prev
       return {
@@ -87,10 +82,10 @@ export default function ScanPage() {
       if (result.valid) {
         setPhase('solve')
       }
-    } catch {
+    } catch (error) {
       setValidation({
         valid: false,
-        issues: [{ code: 'BAD_LENGTH', message: 'The scan is incomplete — go back and capture every face.' }],
+        issues: [{ code: 'CENTER_COLORS', message: error instanceof Error ? error.message : 'Please capture all six faces.' }],
       })
     }
   }
@@ -118,9 +113,10 @@ export default function ScanPage() {
           stepIndex={stepIndex}
           totalSteps={SCAN_SEQUENCE.length}
           allCaptured={allCaptured}
+          captureMap={captureMap}
           onCapture={handleCapture}
           onBack={() => setStepIndex((i) => Math.max(0, i - 1))}
-          onContinue={() => finalizeCaptures(rawCaptures)}
+          onContinue={() => captureMap ? setPhase('correction') : finalizeCaptures(rawCaptures)}
         />
       )}
       {phase === 'correction' && captureMap && (
@@ -130,14 +126,20 @@ export default function ScanPage() {
           onChangeCell={handleChangeCell}
           onSolve={handleSolveClick}
           onRedoFace={handleRedoFace}
+          onRotateFace={(stepId) => {
+            setCaptureMap({ ...captureMap, [stepId]: rotateFace(captureMap[stepId]) })
+            setValidation(null)
+          }}
+          onReplaceCaptures={(next) => { setCaptureMap(next); setValidation(null) }}
         />
       )}
-      {phase === 'solve' && faceletString && solverReadyPromise && scanStartedAt !== null && (
+      {phase === 'solve' && faceletString && captureMap && scanStartedAt !== null && (
         <SolvePhase
           faceletString={faceletString}
-          solverReadyPromise={solverReadyPromise}
+          captureMap={captureMap}
           scanStartedAt={scanStartedAt}
           onStartOver={handleStartOver}
+          onReview={() => setPhase('correction')}
         />
       )}
     </main>

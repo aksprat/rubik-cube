@@ -36,9 +36,6 @@ export function labDistance(a: Lab, b: Lab): number {
   return Math.sqrt((a.l - b.l) ** 2 + (a.a - b.a) ** 2 + (a.b - b.b) ** 2)
 }
 
-// Approximate standard sticker colors, used as seed centroids. Refined per-scan
-// by a couple of k-means-style recentering passes so the classifier adapts to the
-// user's actual lighting/cube rather than relying on these being exactly right.
 const DEFAULT_REFERENCE_RGB: Record<CubeColorName, RGB> = {
   white: { r: 240, g: 240, b: 240 },
   yellow: { r: 255, g: 213, b: 0 },
@@ -67,94 +64,96 @@ export function quickClassifySingle(rgb: RGB): CubeColorName {
   return best
 }
 
-// Classifies a full batch of sticker samples (all 54 for a 3x3 scan) at once,
-// exploiting the known constraint that each color must appear exactly `perColor`
-// times (9 for a 3x3). This is what resolves the classic red/orange ambiguity:
-// rather than trusting a single per-pixel threshold, ambiguous stickers are
-// reassigned relative to each other until every bucket holds exactly `perColor`.
-export function classifyAllStickers(samples: RGB[], perColor = 9): ClassifiedSticker[] {
-  const labs = samples.map(rgbToLab)
-  let centroids: Record<CubeColorName, Lab> = Object.fromEntries(
-    CUBE_COLORS.map((c) => [c, rgbToLab(DEFAULT_REFERENCE_RGB[c])])
-  ) as Record<CubeColorName, Lab>
-
-  let assignment: CubeColorName[] = []
-
-  // A couple of k-means-style recentering passes, seeded by the default swatches.
-  for (let pass = 0; pass < 3; pass++) {
-    assignment = labs.map((lab) => {
-      let best: CubeColorName = CUBE_COLORS[0]
-      let bestDist = Infinity
-      for (const color of CUBE_COLORS) {
-        const dist = labDistance(lab, centroids[color])
-        if (dist < bestDist) {
-          bestDist = dist
-          best = color
+export function minimumCostAssignment(costs: number[][]): number[] {
+  const size = costs.length
+  const rowPotential = Array(size + 1).fill(0)
+  const columnPotential = Array(size + 1).fill(0)
+  const matchedRow = Array(size + 1).fill(0)
+  const previousColumn = Array(size + 1).fill(0)
+  for (let row = 1; row <= size; row++) {
+    matchedRow[0] = row
+    let column = 0
+    const minimum = Array(size + 1).fill(Infinity)
+    const visited = Array(size + 1).fill(false)
+    do {
+      visited[column] = true
+      const currentRow = matchedRow[column]
+      let delta = Infinity
+      let nextColumn = 0
+      for (let candidate = 1; candidate <= size; candidate++) {
+        if (visited[candidate]) continue
+        const cost = costs[currentRow - 1][candidate - 1] - rowPotential[currentRow] - columnPotential[candidate]
+        if (cost < minimum[candidate]) {
+          minimum[candidate] = cost
+          previousColumn[candidate] = column
+        }
+        if (minimum[candidate] < delta) {
+          delta = minimum[candidate]
+          nextColumn = candidate
         }
       }
-      return best
+      for (let candidate = 0; candidate <= size; candidate++) {
+        if (visited[candidate]) {
+          rowPotential[matchedRow[candidate]] += delta
+          columnPotential[candidate] -= delta
+        } else {
+          minimum[candidate] -= delta
+        }
+      }
+      column = nextColumn
+    } while (matchedRow[column] !== 0)
+    do {
+      const predecessor = previousColumn[column]
+      matchedRow[column] = matchedRow[predecessor]
+      column = predecessor
+    } while (column !== 0)
+  }
+  const assignment: number[] = []
+  for (let column = 1; column <= size; column++) assignment[matchedRow[column] - 1] = column - 1
+  return assignment
+}
+
+function classifyAgainstReferences(rgb: RGB, references: Record<CubeColorName, Lab>, assigned?: CubeColorName): ClassifiedSticker {
+  const lab = rgbToLab(rgb)
+  const ranked = CUBE_COLORS.map((color) => ({ color, distance: labDistance(lab, references[color]) }))
+    .sort((first, second) => first.distance - second.distance)
+  const color = assigned ?? ranked[0].color
+  const chosen = ranked.find((entry) => entry.color === color)!
+  const alternative = ranked.find((entry) => entry.color !== color)!
+  const margin = Math.max(0, alternative.distance - chosen.distance)
+  return { color, confidence: Math.min(1, margin / 30) * Math.max(0, 1 - chosen.distance / 80) }
+}
+
+export function classifyAllStickers(samples: RGB[], perColor = 9, centerIndices: number[] = []): ClassifiedSticker[] {
+  if (samples.length !== CUBE_COLORS.length * perColor) throw new Error('Expected an equal number of stickers per color')
+  const references = Object.fromEntries(CUBE_COLORS.map((color) => [color, rgbToLab(DEFAULT_REFERENCE_RGB[color])])) as Record<CubeColorName, Lab>
+  const fixed = new Map<number, ClassifiedSticker>()
+  if (centerIndices.length) {
+    if (centerIndices.length !== 6 || new Set(centerIndices).size !== 6 ||
+      centerIndices.some((index) => !Number.isInteger(index) || index < 0 || index >= samples.length)) {
+      throw new Error('Expected six distinct center indices')
+    }
+    const colors = minimumCostAssignment(centerIndices.map((index) =>
+      CUBE_COLORS.map((color) => labDistance(rgbToLab(samples[index]), references[color]))))
+    centerIndices.forEach((index, center) => {
+      fixed.set(index, classifyAgainstReferences(samples[index], references, CUBE_COLORS[colors[center]]))
     })
-
-    const next: Record<CubeColorName, Lab> = {} as Record<CubeColorName, Lab>
-    for (const color of CUBE_COLORS) {
-      const members = labs.filter((_, i) => assignment[i] === color)
-      if (members.length === 0) {
-        next[color] = centroids[color]
-        continue
-      }
-      next[color] = {
-        l: members.reduce((s, m) => s + m.l, 0) / members.length,
-        a: members.reduce((s, m) => s + m.a, 0) / members.length,
-        b: members.reduce((s, m) => s + m.b, 0) / members.length,
-      }
-    }
-    centroids = next
+    centerIndices.forEach((index, center) => {
+      references[CUBE_COLORS[colors[center]]] = rgbToLab(samples[index])
+    })
   }
+  const remaining = samples.map((_, index) => index).filter((index) => !fixed.has(index))
+  const slots = CUBE_COLORS.flatMap((color) => Array<CubeColorName>(perColor - (fixed.size ? 1 : 0)).fill(color))
+  const assignment = minimumCostAssignment(remaining.map((index) => slots.map((color) =>
+    labDistance(rgbToLab(samples[index]), references[color]))))
+  remaining.forEach((index, position) => fixed.set(index, classifyAgainstReferences(samples[index], references, slots[assignment[position]])))
+  return samples.map((_, index) => fixed.get(index)!)
+}
 
-  // Greedy balancing so every color ends up with exactly `perColor` members:
-  // repeatedly move the least-confidently-assigned sticker out of an overfull
-  // bucket into whichever underfull bucket it's closest to.
-  const distToCentroid = (i: number, color: CubeColorName) => labDistance(labs[i], centroids[color])
-
-  const countOf = (color: CubeColorName) => assignment.filter((c) => c === color).length
-
-  let guard = 0
-  while (guard++ < samples.length * CUBE_COLORS.length) {
-    const overfull = CUBE_COLORS.filter((c) => countOf(c) > perColor)
-    const underfull = CUBE_COLORS.filter((c) => countOf(c) < perColor)
-    if (overfull.length === 0 || underfull.length === 0) break
-
-    let worstIndex = -1
-    let worstColor: CubeColorName | null = null
-    let worstMargin = Infinity
-    for (let i = 0; i < assignment.length; i++) {
-      const current = assignment[i]
-      if (!overfull.includes(current)) continue
-      let bestUnderfull: CubeColorName = underfull[0]
-      let bestUnderfullDist = Infinity
-      for (const color of underfull) {
-        const d = distToCentroid(i, color)
-        if (d < bestUnderfullDist) {
-          bestUnderfullDist = d
-          bestUnderfull = color
-        }
-      }
-      const margin = bestUnderfullDist - distToCentroid(i, current)
-      if (margin < worstMargin) {
-        worstMargin = margin
-        worstIndex = i
-        worstColor = bestUnderfull
-      }
-    }
-    if (worstIndex === -1 || worstColor === null) break
-    assignment[worstIndex] = worstColor
+export function classifyRescannedFace(samples: RGB[], centers: { color: CubeColorName; rgb: RGB }[]): ClassifiedSticker[] {
+  const references = Object.fromEntries(CUBE_COLORS.map((color) => [color, rgbToLab(DEFAULT_REFERENCE_RGB[color])])) as Record<CubeColorName, Lab>
+  if (new Set(centers.map((center) => center.color)).size === 6) {
+    for (const center of centers) references[center.color] = rgbToLab(center.rgb)
   }
-
-  return assignment.map((color, i) => {
-    const distances = CUBE_COLORS.map((c) => distToCentroid(i, c)).sort((x, y) => x - y)
-    const [closest, secondClosest] = distances
-    const spread = secondClosest - closest
-    const confidence = spread <= 0 ? 0 : Math.min(1, spread / 40)
-    return { color, confidence }
-  })
+  return samples.map((sample) => classifyAgainstReferences(sample, references))
 }

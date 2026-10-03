@@ -1,4 +1,4 @@
-import type { CaptureMap, FaceLetter, FaceletString, ScanStepDef } from './types'
+import type { CaptureMap, FaceLetter, FaceletString, FaceReading, ScanStepDef } from './types'
 
 // Fixed guided capture protocol. Each step is a single, simple physical action from
 // the previous one; face identity comes from POSITION in this sequence, not from
@@ -66,9 +66,20 @@ export function deriveColorToLetterMap(captures: CaptureMap): Record<string, Fac
     if (!reading || reading.length !== 9) {
       throw new Error(`Missing capture for face ${step.faceLetter}`)
     }
+    if (map[reading[4].color]) {
+      throw new Error('Each face must have a different center color. Correct the centers or rescan the duplicated face.')
+    }
     map[reading[4].color] = step.faceLetter
   }
   return map
+}
+
+export function rotateFace(reading: FaceReading): FaceReading {
+  return [6, 3, 0, 7, 4, 1, 8, 5, 2].map((index) => reading[index])
+}
+
+export const TOP_EDGE_FACE: Record<string, string> = {
+  front: 'up', right: 'up', back: 'up', left: 'up', up: 'back', down: 'front',
 }
 
 export function buildFaceletString(captures: CaptureMap): FaceletString {

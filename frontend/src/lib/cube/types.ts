@@ -35,6 +35,7 @@ export type CaptureMap = Record<string, FaceReading> // keyed by ScanStepDef.id
 export interface ValidationIssue {
   code:
     | 'BAD_LENGTH'
+    | 'CENTER_COLORS'
     | 'COLOR_COUNT'
     | 'MISSING_CORNER'
     | 'MISSING_EDGE'

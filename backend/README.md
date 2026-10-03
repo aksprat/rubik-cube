@@ -52,16 +52,31 @@ curl http://localhost:8000/api/health
 
 ## `DO_CHAT_MODEL`
 
-`DO_CHAT_MODEL` defaults to `deepseek-4-flash`. This was verified on
-2026-07-23 against a live DigitalOcean account via `GET
-https://inference.do-ai.run/v1/models` — note the catalog's actual slug is
-`deepseek-4-flash`, not `deepseek-v4-flash` as the display name "DeepSeek V4
-Flash" might suggest. DigitalOcean's serverless inference catalog identifies
-models by an internal slug that can differ from the human-readable display
-name, and available models/slugs can change over time, so re-check this if
-chat requests start failing with a model-not-found error:
+`DO_CHAT_MODEL` defaults to `anthropic-claude-haiku-4.5` (Claude Haiku 4.5).
+This is a cost-conscious coaching recommendation, not a replacement for the
+client-side scanner or deterministic solver. The prompt uses the verified move
+list, completed-move count, and holding orientation; it prohibits invented
+solutions. Requests time out rather than leaving the coach waiting indefinitely.
+
+DigitalOcean's published catalog, pricing, and limits were checked on 2026-10-03:
+Haiku costs $1 input / $5 output per million tokens and requires Tier 3+.
+At the same token counts, this is 67% cheaper than Sonnet 4.6.
+Check your account and Model Access Key before deploying; no live inference call
+was made during this change. For a cheaper, non-Anthropic alternative, explicitly
+set `DO_CHAT_MODEL=llama3.3-70b-instruct`.
+
+**Existing deployments:** set `DO_CHAT_MODEL=anthropic-claude-haiku-4.5` in the backend
+App Platform environment and local `.env`, replacing any DeepSeek or Sonnet value. Authorize Haiku in your key,
+and redeploy. Changing the code default does not override a deployed environment
+variable. The API base URL stays `https://inference.do-ai.run/v1/`.
+
+Check the exact slug and availability with your account:
 
 ```bash
 curl https://inference.do-ai.run/v1/models \
   -H "Authorization: Bearer $DO_INFERENCE_API_KEY"
 ```
+
+Run the mocked backend regression tests with `python -m unittest -v test_coach`
+from `backend/`. They exercise the model default/override, progress context,
+empty responses, and sanitized upstream errors without making paid calls.

@@ -21,8 +21,9 @@ function permutationParity(perm: number[]): number {
 }
 
 function hasAllValuesOnce(values: (number | undefined)[], expectedCount: number): boolean {
-  if (values.some((v) => v === undefined)) return false
-  return new Set(values).size === expectedCount
+  return values.length === expectedCount &&
+    Array.from(values).every((value) => Number.isInteger(value) && value! >= 0 && value! < expectedCount) &&
+    new Set(values).size === expectedCount
 }
 
 // Validates a scanned facelet string is a legal, solvable cube state before it's
@@ -49,21 +50,29 @@ export function validateFaceletString(str: FaceletString): ValidationResult {
   }
   if (issues.length > 0) return { valid: false, issues }
 
+  if (FACE_LETTERS.some((letter, index) => str[index * 9 + 4] !== letter)) {
+    return { valid: false, issues: [{ code: 'CENTER_COLORS', message: 'The six centers must identify six different faces.' }] }
+  }
+
   const cube = Cube.fromString(str)
 
   if (!hasAllValuesOnce(cube.cp, 8)) {
     issues.push({
       code: 'MISSING_CORNER',
-      message: 'Not all 8 corners could be matched - a corner sticker was likely misread.',
+      message: 'The corner colors do not form eight distinct pieces. Check corner stickers AND face orientation: a correctly colored face captured sideways also causes this error.',
     })
   }
   if (!hasAllValuesOnce(cube.ep, 12)) {
     issues.push({
       code: 'MISSING_EDGE',
-      message: 'Not all 12 edges could be matched - an edge sticker was likely misread.',
+      message: 'The edge colors do not form twelve distinct pieces. Check edge stickers, face order, and the top edge of each face. Turn the whole cube between captures, not individual layers.',
     })
   }
   if (issues.length > 0) return { valid: false, issues }
+
+  if (cube.asString() !== str) {
+    return { valid: false, issues: [{ code: 'MISSING_CORNER', message: 'A piece has an impossible sticker order. Recheck face orientation and corner colors.' }] }
+  }
 
   const coSum = (cube.co as number[]).reduce((a, b) => a + b, 0)
   const eoSum = (cube.eo as number[]).reduce((a, b) => a + b, 0)
