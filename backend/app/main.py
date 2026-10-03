@@ -5,6 +5,7 @@ Serverless Inference API so the DO API key never reaches the browser.
 
 No database, no auth, no cube-solving logic lives here yet.
 """
+import logging
 import os
 from typing import Literal, Optional
 
@@ -15,6 +16,7 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Rubik's Cube Coach API")
 
@@ -135,7 +137,14 @@ def coach_chat(chat_request: ChatRequest) -> ChatResponse:
             messages=messages,
             max_tokens=800,
         )
-    except Exception:
+    except Exception as error:
+        logger.error(
+            "Coach inference failed: type=%s status=%s code=%s param=%s",
+            type(error).__name__,
+            getattr(error, "status_code", None),
+            getattr(error, "code", None),
+            getattr(error, "param", None),
+        )
         raise HTTPException(
             status_code=502, detail="The coach is unavailable. Check inference access and model configuration."
         )

@@ -44,10 +44,28 @@ class CoachTests(unittest.TestCase):
     @patch("app.main.OpenAI")
     def test_upstream_errors_do_not_leak_details(self, client_class):
         client_class.return_value.chat.completions.create.side_effect = RuntimeError("sensitive-upstream-details")
-        with self.assertRaises(HTTPException) as raised:
-            coach_chat(ChatRequest(messages=[]))
+        with self.assertLogs("app.main", level="ERROR") as logs:
+            with self.assertRaises(HTTPException) as raised:
+                coach_chat(ChatRequest(messages=[]))
         self.assertEqual(raised.exception.status_code, 502)
         self.assertNotIn("sensitive", raised.exception.detail)
+        self.assertNotIn("sensitive", " ".join(logs.output))
+
+    @patch.dict(os.environ, {"DO_INFERENCE_API_KEY": "test-key"}, clear=True)
+    @patch("app.main.OpenAI")
+    def test_provider_status_is_logged_without_request_or_credentials(self, client_class):
+        error = RuntimeError("Private provider message test-key")
+        error.status_code = 403
+        error.code = "model_not_allowed"
+        error.param = "model"
+        client_class.return_value.chat.completions.create.side_effect = error
+        with self.assertLogs("app.main", level="ERROR") as logs:
+            with self.assertRaises(HTTPException):
+                coach_chat(ChatRequest(messages=[ChatMessage(role="user", content="private-question")]))
+        output = " ".join(logs.output)
+        self.assertIn("status=403 code=model_not_allowed param=model", output)
+        for private_value in ["test-key", "private-question", "Private provider message"]:
+            self.assertNotIn(private_value, output)
 
 
 if __name__ == "__main__":
